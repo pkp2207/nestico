@@ -1,194 +1,167 @@
-import { Account, Avatars, Client, OAuthProvider } from "react-native-appwrite";
+import {
+  Client,
+  Account,
+  ID,
+  Databases,
+  OAuthProvider,
+  Avatars,
+  Query,
+  Storage,
+} from "react-native-appwrite";
 import * as Linking from "expo-linking";
-import * as WebBrowser from "expo-web-browser";
-// Add this at the beginning of your appwrite.js file to check the SDK version
-import { version } from "react-native-appwrite";
-console.log("Appwrite SDK Version:", version);
-// ✅ Appwrite Configuration
+import { openAuthSessionAsync } from "expo-web-browser";
+
 export const config = {
   platform: "com.pkp.nestico",
   endpoint: process.env.EXPO_PUBLIC_APPWRITE_ENDPOINT,
   projectId: process.env.EXPO_PUBLIC_APPWRITE_PROJECT_ID,
+  databaseId: process.env.EXPO_PUBLIC_APPWRITE_DATABASE_ID,
+  galleriesCollectionId:
+    process.env.EXPO_PUBLIC_APPWRITE_GALLERIES_COLLECTION_ID,
+  reviewsCollectionId: process.env.EXPO_PUBLIC_APPWRITE_REVIEWS_COLLECTION_ID,
+  agentsCollectionId: process.env.EXPO_PUBLIC_APPWRITE_AGENTS_COLLECTION_ID,
+  propertiesCollectionId:
+    process.env.EXPO_PUBLIC_APPWRITE_PROPERTIES_COLLECTION_ID,
+  bucketId: process.env.EXPO_PUBLIC_APPWRITE_BUCKET_ID,
 };
 
-console.log("Appwrite Config:", config);
-
 export const client = new Client();
-
 client
   .setEndpoint(config.endpoint!)
   .setProject(config.projectId!)
-  .setPlatform(config.platform);
+  .setPlatform(config.platform!);
 
 export const avatar = new Avatars(client);
 export const account = new Account(client);
+export const databases = new Databases(client);
+export const storage = new Storage(client);
 
-interface RedirectParams {
-  secret: string | null;
-  userId: string | null;
-}
-
-async function handleRedirect(url: string) {
-  try {
-    console.log("Handling redirect URL:", url);
-    const parsedUrl = new URL(url);
-    const secret = parsedUrl.searchParams.get("secret");
-    const userId = parsedUrl.searchParams.get("userId");
-
-    if (!secret || !userId) {
-      console.error("Missing auth parameters in redirect URL");
-      return false;
-    }
-
-    console.log("User ID:", userId, "Secret:", secret);
-
-    // Create session with the obtained credentials
-    try {
-      console.log("Creating session with credentials...");
-      const session = await account.createSession(userId, secret);
-      console.log("Session created successfully:", JSON.stringify(session));
-      return session;
-    } catch (sessionError) {
-      const error = sessionError as any;
-      console.error("Session creation error details:", 
-        error.message, 
-        error.code,
-        error.response ? JSON.stringify(error.response) : "No response data"
-      );
-      
-      // Check if user is already logged in
-      try {
-        console.log("Checking if user is already logged in...");
-        const currentUser = await account.get();
-        console.log("User is already logged in:", JSON.stringify(currentUser));
-        return true; // Return success if user is already logged in
-      } catch (userError) {
-        console.error("Failed to get current user:", userError);
-      }
-      
-      return false;
-    }
-  } catch (error) {
-    console.error("Error handling redirect:", error);
-    return false;
-  }
-}
-
-// Also modify your login function to prevent duplicate listeners
 export async function login() {
   try {
-    // Register a listener before initiating OAuth flow
-    const redirectUrl = Linking.createURL("/");
-    console.log("Redirect URI:", redirectUrl);
+    const redirectUri = Linking.createURL("/");
 
-    // Create subscription to handle the redirect
-    // We'll use a variable to store the listener reference
-    let listener: any = null;
-
-    // Create a promise to handle the URL redirection
-    const redirectPromise = new Promise<string | null>((resolve) => {
-      listener = Linking.addEventListener("url", ({ url }) => {
-        console.log("URL event received:", url);
-        resolve(url);
-      });
-    });
-
-    // Create OAuth session
-    const authUrl = await account.createOAuth2Token(
+    const response = await account.createOAuth2Token(
       OAuthProvider.Google,
-      redirectUrl
+      redirectUri
     );
+    if (!response) throw new Error("Create OAuth2 token failed");
 
-    if (!authUrl) throw new Error("OAuth token creation failed");
-    console.log("OAuth URL:", authUrl);
-
-    // Open browser for auth
-    const result = await WebBrowser.openAuthSessionAsync(
-      authUrl.toString(),
-      redirectUrl,
-      {
-        showInRecents: false,
-        createTask: false,
-        // Use preferEphemeralSession on iOS to avoid session conflicts
-        preferEphemeralSession: true,
-      }
+    const browserResult = await openAuthSessionAsync(
+      response.toString(),
+      redirectUri
     );
+    if (browserResult.type !== "success")
+      throw new Error("Create OAuth2 token failed");
 
-    // Remove the event listener
-    if (listener) {
-      listener.remove();
-    }
+    const url = new URL(browserResult.url);
+    const secret = url.searchParams.get("secret")?.toString();
+    const userId = url.searchParams.get("userId")?.toString();
+    if (!secret || !userId) throw new Error("Create OAuth2 token failed");
 
-    // Handle different response types
-    if (result.type === "success") {
-      console.log("WebBrowser returned success:", result.url);
-      return await handleRedirect(result.url);
-    } else {
-      // We can also check if we received a URL from the listener
-      const redirectUrl = await redirectPromise;
-      if (redirectUrl) {
-        console.log("Redirect URL from listener:", redirectUrl);
-        return await handleRedirect(redirectUrl);
-      }
+    const session = await account.createSession(userId, secret);
+    if (!session) throw new Error("Failed to create session");
 
-      console.log("WebBrowser returned:", result.type);
-      throw new Error(`Authentication failed: ${result.type}`);
-    }
-  } catch (error) {
-    if (error instanceof Error) {
-      console.error("Login Error:", error.message);
-    } else {
-      console.error("Login Error:", error);
-    }
-    return false;
-  }
-}
-
-// ✅ Logout Function
-export async function logout() {
-  try {
-    await account.deleteSession("current");
-    console.log("User logged out successfully");
     return true;
   } catch (error) {
-    console.error("Logout Error:", error);
+    console.error(error);
     return false;
   }
 }
 
-// ✅ Fetch Current User Data (Fixed)
+export async function logout() {
+  try {
+    const result = await account.deleteSession("current");
+    return result;
+  } catch (error) {
+    console.error(error);
+    return false;
+  }
+}
+
 export async function getCurrentUser() {
   try {
-    const response = await account.get();
+    const result = await account.get();
+    if (result.$id) {
+      const userAvatar = avatar.getInitials(result.name);
 
-    if (!response || !response?.$id) {
-      throw new Error("User not found");
+      return {
+        ...result,
+        avatar: userAvatar.toString(),
+      };
     }
 
-    console.log("User Data:", JSON.stringify(response));
-
-    return {
-      ...response,
-      avatar: avatar.getInitials(response.name)?.toString() || "",
-    };
+    return null;
   } catch (error) {
-    if (error instanceof Error && error.message === "Already read") {
-      console.log("Session exists but response was already read");
-      return null;
-    }
-    console.error("Get Current User Error:", error);
+    console.log(error);
     return null;
   }
 }
 
-// ✅ Debugging Function (Check if session exists)
-export async function testAuth() {
+export async function getLatestProperties() {
   try {
-    const session = await account.getSession("current");
-    console.log("Current Session:", session);
-    return session;
+    const result = await databases.listDocuments(
+      config.databaseId!,
+      config.propertiesCollectionId!,
+      [Query.orderAsc("$createdAt"), Query.limit(5)]
+    );
+
+    return result.documents;
   } catch (error) {
-    console.error("Session error:", error);
+    console.error(error);
+    return [];
+  }
+}
+
+export async function getProperties({
+  filter,
+  query,
+  limit,
+}: {
+  filter: string;
+  query: string;
+  limit?: number;
+}) {
+  try {
+    const buildQuery = [Query.orderDesc("$createdAt")];
+
+    if (filter && filter !== "All")
+      buildQuery.push(Query.equal("type", filter));
+
+    if (query)
+      buildQuery.push(
+        Query.or([
+          Query.search("name", query),
+          Query.search("address", query),
+          Query.search("type", query),
+        ])
+      );
+
+    if (limit) buildQuery.push(Query.limit(limit));
+
+    const result = await databases.listDocuments(
+      config.databaseId!,
+      config.propertiesCollectionId!,
+      buildQuery
+    );
+
+    return result.documents;
+  } catch (error) {
+    console.error(error);
+    return [];
+  }
+}
+
+// write function to get property by id
+export async function getPropertyById({ id }: { id: string }) {
+  try {
+    const result = await databases.getDocument(
+      config.databaseId!,
+      config.propertiesCollectionId!,
+      id
+    );
+    return result;
+  } catch (error) {
+    console.error(error);
     return null;
   }
 }
